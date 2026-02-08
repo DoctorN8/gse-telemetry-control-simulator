@@ -1,0 +1,139 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gse-postgres
+    environment:
+      POSTGRES_USER: gse_user
+      POSTGRES_PASSWORD: gse_password
+      POSTGRES_DB: gse_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gse_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gse-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: gse-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gse-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gse-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://gse_user:gse_password@postgres:5432/gse_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./database:/app/database
+      - ./docs:/app/docs
+      - ./rag:/app/rag
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - gse-network
+
+  ground-power-unit:
+    build:
+      context: ./devices
+      dockerfile: Dockerfile
+    container_name: gse-gpu
+    environment:
+      - DEVICE_TYPE=ground_power_unit
+      - DEVICE_ID=GPU-001
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./devices:/app
+    restart: unless-stopped
+    networks:
+      - gse-network
+
+  cryo-line:
+    build:
+      context: ./devices
+      dockerfile: Dockerfile
+    container_name: gse-cryo
+    environment:
+      - DEVICE_TYPE=cryogenic_line
+      - DEVICE_ID=CRYO-001
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./devices:/app
+    restart: unless-stopped
+    networks:
+      - gse-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: gse-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - ./docs:/app/docs
+      - ./rag:/app/rag
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    networks:
+      - gse-network
+
+  rag-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile.rag
+    container_name: gse-rag-assistant
+    ports:
+      - "8502:8502"
+    environment:
+      - HANDBOOK_PATH=/app/docs/OPERATIONS_HANDBOOK.md
+    volumes:
+      - ./rag:/app/rag
+      - ./docs:/app/docs
+    command: streamlit run rag/streamlit_app.py --server.port=8502 --server.address=0.0.0.0
+    networks:
+      - gse-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  gse-network:
+    driver: bridge

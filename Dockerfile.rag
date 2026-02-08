@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY rag/requirements.txt /app/rag/requirements.txt
+RUN pip install --no-cache-dir -r rag/requirements.txt
+
+COPY rag/ /app/rag/
+COPY docs/ /app/docs/
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["streamlit", "run", "rag/streamlit_app.py", "--server.port=8502", "--server.address=0.0.0.0"]
